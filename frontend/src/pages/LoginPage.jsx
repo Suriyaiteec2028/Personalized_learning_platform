@@ -1,9 +1,11 @@
 import React, { useState, useContext } from 'react';
 import { AuthContext } from '../context/AuthContext';
-import { BookOpen, UserCheck, GraduationCap, Lock, Mail, User, Phone, Building, Award, FileText, AlertCircle } from 'lucide-react';
+import { ThemeContext } from '../context/ThemeContext';
+import { BookOpen, UserCheck, GraduationCap, Lock, Mail, User, Phone, Building, Award, FileText, AlertCircle, Sun, Moon } from 'lucide-react';
 
 export default function LoginPage() {
   const { login, register, error } = useContext(AuthContext);
+  const { theme, toggleTheme } = useContext(ThemeContext);
 
   const [isRegister, setIsRegister] = useState(false);
   const [selectedRole, setSelectedRole] = useState('student'); // 'student' or 'teacher'
@@ -70,8 +72,30 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-center py-12 sm:px-6 lg:px-8 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-slate-950 to-black">
+    <div className="relative min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-center py-12 sm:px-6 lg:px-8 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-slate-950 to-black transition-colors">
       
+      {/* Floating Theme Toggle (Top Right) */}
+      <div className="absolute top-4 right-4 sm:top-6 sm:right-6 z-20">
+        <button
+          type="button"
+          onClick={toggleTheme}
+          title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+          className="p-2.5 rounded-xl border border-slate-800 bg-slate-900/90 hover:bg-slate-800 transition-all flex items-center space-x-1.5 shadow-lg"
+        >
+          {theme === 'dark' ? (
+            <>
+              <Sun className="h-4 w-4 text-amber-400" />
+              <span className="text-xs font-semibold text-slate-300">Light Mode</span>
+            </>
+          ) : (
+            <>
+              <Moon className="h-4 w-4 text-blue-500" />
+              <span className="text-xs font-semibold text-slate-700">Dark Mode</span>
+            </>
+          )}
+        </button>
+      </div>
+
       <div className="sm:mx-auto sm:w-full sm:max-w-md text-center">
         <div className="inline-flex p-3 bg-blue-600/20 border border-blue-500/30 rounded-2xl text-blue-400 mb-4 shadow-lg shadow-blue-500/10">
           <BookOpen className="h-10 w-10" />

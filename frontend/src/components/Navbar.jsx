@@ -1,14 +1,16 @@
 import React, { useContext } from 'react';
 import { AuthContext } from '../context/AuthContext';
-import { BookOpen, User, LogOut, Key, ShieldCheck, UserCheck } from 'lucide-react';
+import { ThemeContext } from '../context/ThemeContext';
+import { BookOpen, User, LogOut, Key, ShieldCheck, UserCheck, Sun, Moon } from 'lucide-react';
 
 export default function Navbar() {
   const { user, logout } = useContext(AuthContext);
+  const { theme, toggleTheme } = useContext(ThemeContext);
 
   if (!user) return null;
 
   return (
-    <header className="bg-slate-900 border-b border-slate-800 text-white sticky top-0 z-30 shadow-md">
+    <header className="bg-slate-900 border-b border-slate-800 text-white sticky top-0 z-30 shadow-md transition-colors">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
         
         {/* Brand Logo */}
@@ -33,19 +35,39 @@ export default function Navbar() {
           </div>
         )}
 
-        {/* Right Student Connected Info / User Profile */}
-        <div className="flex items-center space-x-4">
+        {/* Right Controls: Theme Toggle + User Info + Logout */}
+        <div className="flex items-center space-x-3 sm:space-x-4">
           {user.role === 'student' && (
             <div className="hidden sm:flex items-center text-xs px-3 py-1 rounded-full bg-slate-800 border border-slate-700 text-slate-300 space-x-1.5">
               <UserCheck className="h-3.5 w-3.5 text-emerald-400" />
               <span>
-                Connected Teacher: <strong className="text-white">{user.connectedTeacherId?.name || 'Not Linked Yet'}</strong>
+                Teacher: <strong className="text-white">{user.connectedTeacherId?.name || 'Not Linked'}</strong>
               </span>
             </div>
           )}
 
+          {/* DARK / LIGHT MODE TOGGLE BUTTON */}
+          <button
+            onClick={toggleTheme}
+            type="button"
+            title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+            className="p-2 rounded-xl border border-slate-800 hover:border-slate-700 bg-slate-950/60 hover:bg-slate-800 transition-all flex items-center space-x-1.5 shadow-sm"
+          >
+            {theme === 'dark' ? (
+              <>
+                <Sun className="h-4 w-4 text-amber-400" />
+                <span className="hidden sm:inline text-xs font-semibold text-slate-300">Light</span>
+              </>
+            ) : (
+              <>
+                <Moon className="h-4 w-4 text-blue-500" />
+                <span className="hidden sm:inline text-xs font-semibold text-slate-700">Dark</span>
+              </>
+            )}
+          </button>
+
           {/* User Badge */}
-          <div className="flex items-center space-x-2 border-l border-slate-800 pl-4">
+          <div className="flex items-center space-x-2 border-l border-slate-800 pl-3 sm:pl-4">
             <div className="text-right">
               <p className="text-sm font-semibold text-white leading-tight">{user.name}</p>
               <span className={`inline-block text-[10px] font-bold uppercase px-2 py-0.2 rounded ${
