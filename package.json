@@ -1,0 +1,14 @@
+{
+  "name": "personalized-learning-platform",
+  "version": "1.0.0",
+  "description": "Unified MERN Personalized Learning Platform",
+  "main": "backend/server.js",
+  "scripts": {
+    "build": "npm install --prefix backend && npm install --prefix frontend && npm run build --prefix frontend",
+    "start": "node backend/server.js",
+    "seed": "npm run seed --prefix backend"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}

@@ -1,13 +1,16 @@
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
+const path = require('path');
+const fs = require('fs');
 const connectDB = require('./config/db');
 
 dotenv.config();
+dotenv.config({ path: path.join(__dirname, '.env') });
 
 const app = express();
 
-// Middleware - CORS must come first, with explicit options
+// Middleware - CORS
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -31,9 +34,21 @@ app.use('/api/tests', require('./routes/testRoutes'));
 app.use('/api/recommendations', require('./routes/recommendationRoutes'));
 app.use('/api/teacher', require('./routes/teacherRoutes'));
 
-app.get('/', (req, res) => {
-  res.json({ message: 'Personalized Learning Platform Backend API Running' });
-});
+// Serve Frontend Static Build for Unified Single-Service Deployment
+const frontendDist = path.join(__dirname, '../frontend/dist');
+if (fs.existsSync(frontendDist)) {
+  app.use(express.static(frontendDist));
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api')) {
+      return next();
+    }
+    res.sendFile(path.join(frontendDist, 'index.html'));
+  });
+} else {
+  app.get('/', (req, res) => {
+    res.json({ message: 'Personalized Learning Platform Backend API Running' });
+  });
+}
 
 // JSON parse error handler (catches body-parser SyntaxError)
 app.use((err, req, res, next) => {
