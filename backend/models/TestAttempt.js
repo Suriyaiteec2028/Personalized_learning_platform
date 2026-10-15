@@ -77,6 +77,18 @@ const testAttemptSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  malpracticeCount: {
+    type: Number,
+    default: 0
+  },
+  isTerminatedForMalpractice: {
+    type: Boolean,
+    default: false
+  },
+  malpracticeReason: {
+    type: String,
+    default: ''
+  },
   answers: [answerSchema],
   topicPerformance: [topicPerfSchema]
 }, {

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import API from '../services/api';
 import {
   Shield,
@@ -15,14 +15,23 @@ import {
   Terminal,
   Save,
   ListChecks,
-  PieChart
+  PieChart,
+  Maximize2,
+  Lock,
+  Ban
 } from 'lucide-react';
+
+const MAX_STRIKES = 5;
 
 export default function SecureTestModal({ testData, onClose, onTestCompleted }) {
   const [currentIdx, setCurrentIdx] = useState(0);
   const [studentAnswers, setStudentAnswers] = useState({});
-  const [tabSwitchCount, setTabSwitchCount] = useState(0);
-  const [warningMessage, setWarningMessage] = useState('');
+  const [malpracticeCount, setMalpracticeCount] = useState(0);
+  const [malpracticeLogs, setMalpracticeLogs] = useState([]);
+  const [warningBanner, setWarningBanner] = useState('');
+  const [isFullscreen, setIsFullscreen] = useState(true);
+  const [isBlocked, setIsBlocked] = useState(false);
+
   const [startTime] = useState(new Date());
   const [timeLeftSeconds, setTimeLeftSeconds] = useState((testData.durationMinutes || 30) * 60);
   const [submitting, setSubmitting] = useState(false);
@@ -33,67 +42,228 @@ export default function SecureTestModal({ testData, onClose, onTestCompleted }) 
   const [runResults, setRunResults] = useState({}); // map of questionId -> result
   const [lastAutoSaveTime, setLastAutoSaveTime] = useState(null);
 
-  // Result view active tab: 'overview' | 'questions'
+  // Result view active tab: 'questions' | 'overview'
   const [resultTab, setResultTab] = useState('questions');
 
-  // Anti-cheat restriction handlers
+  // Cooldown tracker to prevent duplicate strikes within 1.2s
+  const lastViolationTimeRef = useRef(0);
+  const modalContainerRef = useRef(null);
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 1. FULLSCREEN MANAGEMENT
+  // ─────────────────────────────────────────────────────────────────────────────
+  const requestFullScreen = () => {
+    try {
+      const elem = document.documentElement;
+      if (elem.requestFullscreen) {
+        elem.requestFullscreen().catch(() => {});
+      } else if (elem.webkitRequestFullscreen) {
+        elem.webkitRequestFullscreen();
+      } else if (elem.msRequestFullscreen) {
+        elem.msRequestFullscreen();
+      }
+    } catch (_) {}
+  };
+
+  useEffect(() => {
+    requestFullScreen();
+    const handleFullscreenChange = () => {
+      const isFull = !!(
+        document.fullscreenElement ||
+        document.webkitFullscreenElement ||
+        document.mozFullScreenElement ||
+        document.msFullscreenElement
+      );
+      setIsFullscreen(isFull);
+      if (!isFull && !testResult && !isBlocked) {
+        triggerMalpracticeStrike('Exited Fullscreen Mode! Fullscreen is required.');
+      }
+    };
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+    };
+  }, [testResult, isBlocked]);
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 2. MALPRACTICE STRIKE ENGINE (5 STRIKES MAX)
+  // ─────────────────────────────────────────────────────────────────────────────
+  const triggerMalpracticeStrike = (reason) => {
+    if (isBlocked || testResult) return;
+
+    const now = Date.now();
+    // Debounce duplicate events within 1.2 seconds
+    if (now - lastViolationTimeRef.current < 1200) return;
+    lastViolationTimeRef.current = now;
+
+    setMalpracticeCount((prev) => {
+      const newCount = prev + 1;
+      const logEntry = {
+        strike: newCount,
+        reason,
+        time: new Date().toLocaleTimeString()
+      };
+      setMalpracticeLogs((logs) => [...logs, logEntry]);
+
+      if (newCount >= MAX_STRIKES) {
+        // AUTOMATIC TERMINATION & LOCKOUT
+        setIsBlocked(true);
+        setWarningBanner(`🚨 MALPRACTICE LIMIT EXCEEDED (5/5 Strikes). Test is permanently locked and submitted.`);
+        handleFinalSubmit(true, `Test terminated: Exceeded maximum 5 anti-cheat malpractice strikes. Last violation: ${reason}`);
+      } else {
+        const remaining = MAX_STRIKES - newCount;
+        setWarningBanner(
+          `⚠️ MALPRACTICE STRIKE ${newCount} of ${MAX_STRIKES}: ${reason}. (${remaining} strike${remaining > 1 ? 's' : ''} remaining before automatic termination!)`
+        );
+        setTimeout(() => setWarningBanner(''), 6000);
+      }
+
+      return newCount;
+    });
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 3. KEYBOARD, SHORTCUT & FUNCTION KEY RESTRICTIONS
+  // ─────────────────────────────────────────────────────────────────────────────
   useEffect(() => {
     const handleKeyDown = (e) => {
+      if (isBlocked || testResult) return;
+
+      const key = e.key;
+      const code = e.code || '';
+      const isCtrlOrMeta = e.ctrlKey || e.metaKey;
+
+      // 1. BLOCK ALL FUNCTION KEYS (F1 - F12)
       if (
-        e.key.startsWith('F') ||
-        (e.ctrlKey && ['c', 'v', 'a', 'x', 'u', 'i'].includes(e.key.toLowerCase())) ||
-        (e.altKey && e.key === 'Tab')
+        key.startsWith('F') && !isNaN(parseInt(key.substring(1))) ||
+        ['F1','F2','F3','F4','F5','F6','F7','F8','F9','F10','F11','F12'].includes(key) ||
+        code.startsWith('F') && !isNaN(parseInt(code.substring(1)))
       ) {
         e.preventDefault();
-        setWarningMessage('Restricted key detected! Shortcuts disabled in secure test mode.');
-        setTimeout(() => setWarningMessage(''), 4000);
+        e.stopPropagation();
+        triggerMalpracticeStrike(`Function Key [${key || code}] pressed! Function keys are prohibited.`);
+        return false;
       }
-    };
-    const handleVisibility = () => {
-      if (document.hidden) {
-        setTabSwitchCount((prev) => {
-          const n = prev + 1;
-          setWarningMessage(`ALERT: Tab switch detected! (Count: ${n}). Tab switching is prohibited.`);
-          setTimeout(() => setWarningMessage(''), 5000);
-          return n;
-        });
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    document.addEventListener('visibilitychange', handleVisibility);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-      document.removeEventListener('visibilitychange', handleVisibility);
-    };
-  }, []);
 
-  // Timer Countdown
+      // 2. BLOCK COPY, PASTE, CUT SHORTCUTS (Ctrl+C, Ctrl+V, Ctrl+X)
+      if (isCtrlOrMeta && ['c', 'v', 'x'].includes(key.toLowerCase())) {
+        e.preventDefault();
+        e.stopPropagation();
+        triggerMalpracticeStrike(`Clipboard shortcut [Ctrl+${key.toUpperCase()}] is prohibited!`);
+        return false;
+      }
+
+      // 3. BLOCK DEVTOOLS, PRINT, VIEW SOURCE, SELECT ALL (Ctrl+Shift+I/J/C, Ctrl+U, Ctrl+P, Ctrl+S)
+      if (
+        (isCtrlOrMeta && ['u', 'p', 's'].includes(key.toLowerCase())) ||
+        (isCtrlOrMeta && e.shiftKey && ['i', 'j', 'c'].includes(key.toLowerCase()))
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        triggerMalpracticeStrike(`Developer/System shortcut [Ctrl+${key.toUpperCase()}] is prohibited!`);
+        return false;
+      }
+
+      // 4. BLOCK ALT+TAB / WINDOWS META
+      if ((e.altKey && key === 'Tab') || key === 'Meta') {
+        e.preventDefault();
+        e.stopPropagation();
+        triggerMalpracticeStrike('Application navigation shortcut (Alt+Tab / Windows Key) detected!');
+        return false;
+      }
+    };
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // 4. CLIPBOARD & RIGHT-CLICK (CONTEXT MENU) BLOCKING
+    // ─────────────────────────────────────────────────────────────────────────
+    const handleCopy = (e) => {
+      e.preventDefault();
+      triggerMalpracticeStrike('Copy action attempted!');
+    };
+
+    const handlePaste = (e) => {
+      e.preventDefault();
+      triggerMalpracticeStrike('Paste action attempted!');
+    };
+
+    const handleCut = (e) => {
+      e.preventDefault();
+      triggerMalpracticeStrike('Cut action attempted!');
+    };
+
+    const handleContextMenu = (e) => {
+      e.preventDefault();
+      triggerMalpracticeStrike('Right-click context menu is prohibited!');
+    };
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // 5. TAB SWITCH & WINDOW FOCUS LOSS (BLUR)
+    // ─────────────────────────────────────────────────────────────────────────
+    const handleVisibilityChange = () => {
+      if (document.hidden && !isBlocked && !testResult) {
+        triggerMalpracticeStrike('Navigated away or switched browser tab!');
+      }
+    };
+
+    const handleWindowBlur = () => {
+      if (!isBlocked && !testResult) {
+        triggerMalpracticeStrike('Window focus lost! Navigating away from test is prohibited.');
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown, true);
+    window.addEventListener('copy', handleCopy, true);
+    window.addEventListener('paste', handlePaste, true);
+    window.addEventListener('cut', handleCut, true);
+    window.addEventListener('contextmenu', handleContextMenu, true);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('blur', handleWindowBlur);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, true);
+      window.removeEventListener('copy', handleCopy, true);
+      window.removeEventListener('paste', handlePaste, true);
+      window.removeEventListener('cut', handleCut, true);
+      window.removeEventListener('contextmenu', handleContextMenu, true);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('blur', handleWindowBlur);
+    };
+  }, [isBlocked, testResult]);
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 6. TIMER COUNTDOWN
+  // ─────────────────────────────────────────────────────────────────────────────
   useEffect(() => {
-    if (testResult) return;
+    if (testResult || isBlocked) return;
     const timer = setInterval(() => {
       setTimeLeftSeconds((prev) => {
         if (prev <= 1) {
           clearInterval(timer);
-          handleFinalSubmit();
+          handleFinalSubmit(false, 'Time expired.');
           return 0;
         }
         return prev - 1;
       });
     }, 1000);
     return () => clearInterval(timer);
-  }, [testResult]);
+  }, [testResult, isBlocked]);
 
   const formatTime = (s) =>
     `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 
   // Auto-save handler: updates state immediately on typing
   const handleAnswerSelect = (qId, val) => {
+    if (isBlocked) return;
     setStudentAnswers((prev) => ({ ...prev, [qId]: val }));
     setLastAutoSaveTime(new Date());
   };
 
   // Run Code feature for programming questions
   const handleRunCode = async (questionId) => {
+    if (isBlocked) return;
     const currentCode =
       studentAnswers[questionId] !== undefined
         ? studentAnswers[questionId]
@@ -113,14 +283,13 @@ export default function SecureTestModal({ testData, onClose, onTestCompleted }) 
     }
   };
 
-  // Final Submit: automatically considers the last typed code even if student never clicked Run
-  const handleFinalSubmit = async () => {
+  // Final Submit
+  const handleFinalSubmit = async (isTerminated = false, terminationReason = '') => {
     if (submitting || testResult) return;
     setSubmitting(true);
     const endTime = new Date();
 
     const formattedAnswers = testData.questions.map((q) => {
-      // Last typed code or sampleCode is automatically used
       const rawAns =
         studentAnswers[q._id] !== undefined
           ? studentAnswers[q._id]
@@ -141,7 +310,10 @@ export default function SecureTestModal({ testData, onClose, onTestCompleted }) 
         weakTopic: testData.topicTitle || '',
         startTime,
         endTime,
-        tabSwitchCount,
+        tabSwitchCount: malpracticeCount,
+        malpracticeCount,
+        isTerminatedForMalpractice: isTerminated,
+        malpracticeReason: terminationReason,
         answers: formattedAnswers
       };
 
@@ -149,6 +321,7 @@ export default function SecureTestModal({ testData, onClose, onTestCompleted }) 
       setTestResult(res.data);
       if (onTestCompleted) onTestCompleted(res.data);
     } catch (err) {
+      console.error('Submission error:', err);
       alert('Error submitting test: ' + (err.response?.data?.message || err.message));
     } finally {
       setSubmitting(false);
@@ -158,22 +331,45 @@ export default function SecureTestModal({ testData, onClose, onTestCompleted }) 
   const currentQ = testData.questions[currentIdx];
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // RESULT SUMMARY SCREEN (POST-SUBMIT)
+  // RESULT SUMMARY SCREEN (POST-SUBMIT OR MALPRACTICE TERMINATION)
   // ═══════════════════════════════════════════════════════════════════════════
   if (testResult) {
     const questionsList = testResult.questionResults || [];
+    const wasBlocked = testResult.isTerminatedForMalpractice || isBlocked;
 
     return (
       <div className="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-lg flex items-center justify-center p-4 overflow-y-auto">
         <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-4xl w-full p-6 sm:p-8 shadow-2xl text-slate-100 max-h-[92vh] flex flex-col">
           {/* Header */}
           <div className="text-center mb-5 flex-shrink-0">
-            <div className="inline-flex p-3 bg-emerald-500/20 text-emerald-400 rounded-full mb-2 border border-emerald-500/30">
-              <Award className="h-10 w-10" />
-            </div>
-            <h2 className="text-2xl font-black text-white">Test Completed & Evaluated!</h2>
+            {wasBlocked ? (
+              <div className="inline-flex p-3 bg-rose-500/20 text-rose-400 rounded-full mb-2 border border-rose-500/30 animate-bounce">
+                <Ban className="h-10 w-10" />
+              </div>
+            ) : (
+              <div className="inline-flex p-3 bg-emerald-500/20 text-emerald-400 rounded-full mb-2 border border-emerald-500/30">
+                <Award className="h-10 w-10" />
+              </div>
+            )}
+
+            <h2 className={`text-2xl font-black ${wasBlocked ? 'text-rose-400' : 'text-white'}`}>
+              {wasBlocked ? 'Test Blocked & Terminated Due to Malpractice' : 'Test Completed & Evaluated!'}
+            </h2>
             <p className="text-xs text-slate-400 mt-1">{testResult.testTitle}</p>
           </div>
+
+          {/* Malpractice Callout Box if Blocked */}
+          {wasBlocked && (
+            <div className="bg-rose-950/60 border border-rose-500/40 p-4 rounded-2xl mb-4 text-xs text-rose-200 flex-shrink-0">
+              <div className="flex items-center space-x-2 font-bold text-rose-300 mb-1">
+                <AlertTriangle className="h-4 w-4" />
+                <span>ANTI-CHEAT SYSTEM VIOLATION ENFORCEMENT</span>
+              </div>
+              <p className="leading-relaxed">
+                You exceeded the maximum allowed limit of <strong>5 anti-cheat violations</strong> (tab-switching, exiting fullscreen, or prohibited shortcut/function keys). Your test was automatically locked and submitted. All answers submitted prior to termination have been evaluated, and violation logs have been reported to your teacher.
+              </p>
+            </div>
+          )}
 
           {/* Quick Score Overview Cards */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5 text-center flex-shrink-0">
@@ -222,13 +418,17 @@ export default function SecureTestModal({ testData, onClose, onTestCompleted }) 
               </span>
             </div>
             <div className="text-slate-400">
-              <span>Security Warnings:{' '}</span>
+              <span>Anti-Cheat Strikes:{' '}</span>
               <strong
                 className={
-                  testResult.tabSwitchCount > 0 ? 'text-rose-400' : 'text-emerald-400'
+                  (testResult.malpracticeCount || testResult.tabSwitchCount) >= MAX_STRIKES
+                    ? 'text-rose-400 font-black'
+                    : (testResult.malpracticeCount || testResult.tabSwitchCount) > 0
+                    ? 'text-amber-400'
+                    : 'text-emerald-400'
                 }
               >
-                {testResult.tabSwitchCount} tab switch(es)
+                {testResult.malpracticeCount || testResult.tabSwitchCount} / {MAX_STRIKES} Strikes
               </strong>
             </div>
           </div>
@@ -244,7 +444,7 @@ export default function SecureTestModal({ testData, onClose, onTestCompleted }) 
               }`}
             >
               <ListChecks className="h-4 w-4" />
-              <span>Question-by-Question Marks Breakdown ({questionsList.length})</span>
+              <span>Question Marks Breakdown ({questionsList.length})</span>
             </button>
             <button
               onClick={() => setResultTab('overview')}
@@ -262,7 +462,6 @@ export default function SecureTestModal({ testData, onClose, onTestCompleted }) 
           {/* TAB CONTENT (Scrollable) */}
           <div className="flex-1 overflow-y-auto pr-1 space-y-3 mb-4">
             {resultTab === 'questions' ? (
-              /* Question-by-Question Marks Summary */
               <div className="space-y-3">
                 {questionsList.map((q, idx) => (
                   <div
@@ -292,7 +491,7 @@ export default function SecureTestModal({ testData, onClose, onTestCompleted }) 
                         </span>
                       </div>
 
-                      {/* Marks Score Display for this question */}
+                      {/* Marks Score Display */}
                       <div className="flex items-center space-x-2">
                         <span
                           className={`font-mono text-xs font-black px-2.5 py-1 rounded-lg border ${
@@ -353,7 +552,6 @@ export default function SecureTestModal({ testData, onClose, onTestCompleted }) 
                           </p>
                         </div>
 
-                        {/* Test case breakdown if available */}
                         {q.testCaseResults && q.testCaseResults.length > 0 && (
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                             {q.testCaseResults.map((tc, tcIdx) => (
@@ -379,7 +577,6 @@ export default function SecureTestModal({ testData, onClose, onTestCompleted }) 
                 ))}
               </div>
             ) : (
-              /* Topic Skill Analysis Breakdown */
               <div className="space-y-2.5">
                 {testResult.topicPerformance.map((tp, i) => (
                   <div
@@ -422,12 +619,39 @@ export default function SecureTestModal({ testData, onClose, onTestCompleted }) 
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // ACTIVE TEST WINDOW
+  // ACTIVE TEST WINDOW (STRICT FULLSCREEN & ANTI-CHEAT ENFORCEMENT)
   // ═══════════════════════════════════════════════════════════════════════════
   const currentRunResult = runResults[currentQ?._id];
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-950 text-slate-100 flex flex-col overflow-hidden">
+    <div
+      ref={modalContainerRef}
+      onCopy={(e) => { e.preventDefault(); triggerMalpracticeStrike('Copy action prohibited!'); }}
+      onPaste={(e) => { e.preventDefault(); triggerMalpracticeStrike('Paste action prohibited!'); }}
+      onCut={(e) => { e.preventDefault(); triggerMalpracticeStrike('Cut action prohibited!'); }}
+      onContextMenu={(e) => { e.preventDefault(); triggerMalpracticeStrike('Right click context menu is disabled!'); }}
+      className="fixed inset-0 z-50 bg-slate-950 text-slate-100 flex flex-col overflow-hidden select-none"
+    >
+      {/* FULLSCREEN RE-ENTRY OVERLAY IF EXITED */}
+      {!isFullscreen && (
+        <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center">
+          <div className="p-4 bg-rose-500/20 text-rose-400 rounded-full mb-4 border border-rose-500/40 animate-pulse">
+            <Maximize2 className="h-12 w-12" />
+          </div>
+          <h2 className="text-2xl font-black text-white mb-2">FULLSCREEN MODE REQUIRED</h2>
+          <p className="text-sm text-slate-300 max-w-md mb-6 leading-relaxed">
+            Exiting fullscreen is recorded as a malpractice strike. You must remain in fullscreen mode throughout the examination.
+          </p>
+          <button
+            onClick={requestFullScreen}
+            className="px-8 py-3.5 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-2xl shadow-xl transition-all flex items-center space-x-2 text-sm"
+          >
+            <Maximize2 className="h-4 w-4" />
+            <span>Return to Fullscreen & Resume Test</span>
+          </button>
+        </div>
+      )}
+
       {/* Top Bar */}
       <div className="bg-slate-900 border-b border-slate-800 px-6 py-3 flex items-center justify-between shadow-md">
         <div className="flex items-center space-x-3">
@@ -437,35 +661,46 @@ export default function SecureTestModal({ testData, onClose, onTestCompleted }) 
           <div>
             <h3 className="font-bold text-sm text-white">{testData.courseTitle || 'Course Test'}</h3>
             <span className="text-xs text-slate-400">
-              Secure Assessment Mode | Total Questions: {testData.totalQuestions}
+              Strict Anti-Cheat Assessment Mode | Total Questions: {testData.totalQuestions}
             </span>
           </div>
         </div>
 
-        {/* Tab switch warnings */}
-        {tabSwitchCount > 0 && (
-          <div className="hidden sm:flex items-center space-x-2 bg-rose-500/20 border border-rose-500/40 text-rose-300 text-xs px-3 py-1 rounded-full">
+        {/* Live Malpractice Strikes Counter (Max 5) */}
+        <div className="flex items-center space-x-3">
+          <div
+            className={`flex items-center space-x-1.5 px-3 py-1 rounded-full text-xs font-bold border transition-all ${
+              malpracticeCount >= 4
+                ? 'bg-rose-600/30 border-rose-500 text-rose-300 animate-pulse'
+                : malpracticeCount > 0
+                ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
+                : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+            }`}
+          >
             <AlertTriangle className="h-3.5 w-3.5" />
             <span>
-              Tab Switches: <strong>{tabSwitchCount}</strong>
+              Malpractice Strikes:{' '}
+              <strong className="font-mono text-sm">
+                {malpracticeCount} / {MAX_STRIKES}
+              </strong>
             </span>
           </div>
-        )}
 
-        {/* Countdown Timer */}
-        <div className="flex items-center space-x-2 bg-slate-950 px-4 py-1.5 rounded-xl border border-slate-800">
-          <Clock className="h-4 w-4 text-amber-400" />
-          <span className="font-mono text-sm font-bold text-amber-300 tracking-wider">
-            {formatTime(timeLeftSeconds)}
-          </span>
+          {/* Countdown Timer */}
+          <div className="flex items-center space-x-2 bg-slate-950 px-4 py-1.5 rounded-xl border border-slate-800">
+            <Clock className="h-4 w-4 text-amber-400" />
+            <span className="font-mono text-sm font-bold text-amber-300 tracking-wider">
+              {formatTime(timeLeftSeconds)}
+            </span>
+          </div>
         </div>
       </div>
 
-      {/* Security Toast Warning */}
-      {warningMessage && (
-        <div className="bg-rose-600 text-white text-xs font-semibold px-6 py-2 flex items-center justify-center space-x-2">
-          <AlertTriangle className="h-4 w-4" />
-          <span>{warningMessage}</span>
+      {/* Security Toast Warning Banner */}
+      {warningBanner && (
+        <div className="bg-rose-600 text-white text-xs font-bold px-6 py-2.5 flex items-center justify-center space-x-2 shadow-lg animate-pulse">
+          <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+          <span className="text-center">{warningBanner}</span>
         </div>
       )}
 
@@ -499,7 +734,7 @@ export default function SecureTestModal({ testData, onClose, onTestCompleted }) 
             })}
           </div>
 
-          <div className="mt-auto pt-4 border-t border-slate-800 text-xs text-slate-400 space-y-1">
+          <div className="mt-auto pt-4 border-t border-slate-800 text-xs text-slate-400 space-y-1.5">
             <div className="flex items-center space-x-2">
               <div className="w-3 h-3 rounded bg-emerald-500/30 border border-emerald-500/50" />
               <span>Answered</span>
@@ -507,6 +742,9 @@ export default function SecureTestModal({ testData, onClose, onTestCompleted }) 
             <div className="flex items-center space-x-2">
               <div className="w-3 h-3 rounded bg-slate-950 border border-slate-800" />
               <span>Unanswered</span>
+            </div>
+            <div className="pt-2 text-[10px] text-rose-400 font-semibold border-t border-slate-800/80">
+              🔒 Anti-Cheat Enabled: Tab switch, Copy-Paste & F-keys blocked. (Max 5 strikes).
             </div>
           </div>
         </div>
@@ -576,12 +814,12 @@ export default function SecureTestModal({ testData, onClose, onTestCompleted }) 
               })}
             </div>
           ) : (
-            /* Programming Question Workspace with Run Option */
+            /* Programming Question Workspace */
             <div className="space-y-3 mb-6 flex-1 flex flex-col">
               <div className="flex items-center justify-between">
                 <label className="text-xs font-semibold text-amber-300 flex items-center space-x-1.5">
                   <Code className="h-4 w-4" />
-                  <span>Code Editor</span>
+                  <span>Code Editor (Protected)</span>
                 </label>
 
                 {/* RUN PROGRAM OPTION */}
@@ -596,7 +834,7 @@ export default function SecureTestModal({ testData, onClose, onTestCompleted }) 
                 </button>
               </div>
 
-              {/* Smart Code Editor with Tab/Enter indentation */}
+              {/* Protected Code Editor */}
               <textarea
                 value={
                   studentAnswers[currentQ._id] !== undefined
@@ -611,6 +849,9 @@ export default function SecureTestModal({ testData, onClose, onTestCompleted }) 
                 autoCorrect="off"
                 autoCapitalize="off"
                 style={{ tabSize: 4 }}
+                onCopy={(e) => { e.preventDefault(); triggerMalpracticeStrike('Copying code is blocked!'); }}
+                onPaste={(e) => { e.preventDefault(); triggerMalpracticeStrike('Pasting code is blocked!'); }}
+                onCut={(e) => { e.preventDefault(); triggerMalpracticeStrike('Cutting code is blocked!'); }}
                 onKeyDown={(e) => {
                   const ta = e.target;
                   const start = ta.selectionStart;
@@ -677,11 +918,11 @@ export default function SecureTestModal({ testData, onClose, onTestCompleted }) 
                   <strong className="text-slate-400">{'}'}</strong> = auto de-indent
                 </p>
                 <span className="text-[11px] text-amber-400/80">
-                  ⚡ Latest typed code is auto-saved and evaluated upon submit
+                  ⚡ Auto-saved continuously. Evaluated upon submit.
                 </span>
               </div>
 
-              {/* RUN OUTPUT CONSOLE (PASS / FAIL RESULT DISPLAY) */}
+              {/* RUN OUTPUT CONSOLE */}
               {currentRunResult && (
                 <div
                   className={`mt-2 p-4 rounded-2xl border text-xs font-mono transition-all ${
@@ -772,7 +1013,7 @@ export default function SecureTestModal({ testData, onClose, onTestCompleted }) 
               </button>
             ) : (
               <button
-                onClick={handleFinalSubmit}
+                onClick={() => handleFinalSubmit(false, '')}
                 disabled={submitting}
                 className="px-8 py-2.5 rounded-xl bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-500 flex items-center space-x-2 shadow-lg shadow-emerald-600/20"
               >

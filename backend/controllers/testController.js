@@ -192,7 +192,19 @@ exports.getReattemptTestQuestions = async (req, res) => {
 // ─── Submit & Evaluate Test ────────────────────────────────────────────────────
 exports.submitTest = async (req, res) => {
   try {
-    const { courseId, isReattempt, weakTopic, startTime, endTime, tabSwitchCount, answers, questionsSnapshot } = req.body;
+    const {
+      courseId,
+      isReattempt,
+      weakTopic,
+      startTime,
+      endTime,
+      tabSwitchCount,
+      malpracticeCount,
+      isTerminatedForMalpractice,
+      malpracticeReason,
+      answers,
+      questionsSnapshot
+    } = req.body;
     const studentId = req.user._id;
 
     const course = await Course.findById(courseId);
@@ -324,6 +336,9 @@ exports.submitTest = async (req, res) => {
       startTime: new Date(startTime || Date.now() - 300000),
       endTime: new Date(endTime || Date.now()),
       tabSwitchCount: tabSwitchCount || 0,
+      malpracticeCount: malpracticeCount !== undefined ? malpracticeCount : (tabSwitchCount || 0),
+      isTerminatedForMalpractice: !!isTerminatedForMalpractice,
+      malpracticeReason: malpracticeReason || '',
       answers: processedAnswers,
       topicPerformance
     });
@@ -337,6 +352,9 @@ exports.submitTest = async (req, res) => {
       startTime: testAttempt.startTime,
       endTime: testAttempt.endTime,
       tabSwitchCount: testAttempt.tabSwitchCount,
+      malpracticeCount: testAttempt.malpracticeCount,
+      isTerminatedForMalpractice: testAttempt.isTerminatedForMalpractice,
+      malpracticeReason: testAttempt.malpracticeReason,
       topicPerformance,
       questionResults   // ← per-question detail for the summary screen
     });
